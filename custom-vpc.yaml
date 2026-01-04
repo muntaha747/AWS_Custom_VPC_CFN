@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VPC with public and private subnets, IGW, NAT Gateway, and EC2 instances
+
+##################################################################################
+# PARAMETERS
+##################################################################################
+
+Parameters:
+  VPCCIDR:
+    Type: String
+    Default: 10.20.0.0/16
+
+  SubnetCIDR1:
+    Type: String
+    Default: 10.20.1.0/24
+
+  SubnetCIDR2:
+    Type: String
+    Default: 10.20.2.0/24
+
+  SubnetCIDR3:
+    Type: String
+    Default: 10.20.3.0/24
+
+  SubnetCIDR4:
+    Type: String
+    Default: 10.20.4.0/24
+
+  AZ1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ca-central-1a
+
+  AZ2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ca-central-1b
+
+  AMIID:
+    Type: AWS::EC2::Image::Id
+    Default: ami-085f043560da76e08
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: VPC_CF
+
+##################################################################################
+# RESOURCES
+##################################################################################
+
+Resources:
+
+##################################
+# VPC
+##################################
+
+  CustomVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: CustomVPC
+
+##################################
+# INTERNET GATEWAY
+##################################
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CustomVPC
+      InternetGatewayId: !Ref InternetGateway
+
+##################################
+# PUBLIC ROUTE TABLE
+##################################
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CustomVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+##################################
+# PRIVATE ROUTE TABLE
+##################################
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CustomVPC
+
+##################################
+# SUBNETS
+##################################
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CustomVPC
+      CidrBlock: !Ref SubnetCIDR1
+      AvailabilityZone: !Ref AZ1
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CustomVPC
+      CidrBlock: !Ref SubnetCIDR2
+      AvailabilityZone: !Ref AZ1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CustomVPC
+      CidrBlock: !Ref SubnetCIDR3
+      AvailabilityZone: !Ref AZ2
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CustomVPC
+      CidrBlock: !Ref SubnetCIDR4
+      AvailabilityZone: !Ref AZ2
+
+##################################
+# SUBNET ROUTE TABLE ASSOCIATIONS
+##################################
+
+  PublicSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+##################################
+# NAT GATEWAY
+##################################
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachIGW
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+##################################
+# SECURITY GROUP
+##################################
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH HTTP HTTPS
+      VpcId: !Ref CustomVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+##################################
+# EC2 INSTANCES
+##################################
+
+  PublicEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMIID
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPair
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+
+  PrivateEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMIID
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPair
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+        
